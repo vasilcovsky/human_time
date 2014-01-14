@@ -1,6 +1,4 @@
-"Written by Tefion Jordan"
-
-import human_time
+import parser
 import unittest
 from datetime import datetime
 
@@ -72,6 +70,48 @@ class HTTester(unittest.TestCase):
                 datetime(2014, 1, 21, 14, 30),
                 datetime(2014, 2, 21, 14, 30),
             )),
+
+            ("every Monday at this time", (
+                datetime(2013, 12, 9, 6, 20),
+                datetime(2013, 12, 16, 6, 20),
+                datetime(2013, 12, 23, 6, 20),
+            )),
+
+            ("every other Sunday at current time", (
+                datetime(2013, 12, 8, 6, 20),
+                datetime(2013, 12, 22, 6, 20),
+            )),
+
+            ("15th of every month at this time", (
+                datetime(2013, 12, 15, 6, 20),
+                datetime(2014, 1, 15, 6, 20),
+                datetime(2014, 2, 15, 6, 20),
+            )),
+
+            ("end of every month", (
+                datetime(2013, 12, 31),
+                datetime(2014, 1, 31),
+                datetime(2014, 2, 28),
+            )),
+
+            ("end of every month at 18:00", (
+                datetime(2013, 12, 31, 18, 0),
+                datetime(2014, 1, 31, 18, 0),
+            )),
+            
+            ("first monday after second sunday of month", (
+                datetime(2013, 12, 9),
+                datetime(2014, 1, 13),
+                datetime(2014, 2, 10),
+                datetime(2014, 3, 10),
+                datetime(2014, 4, 14),
+                datetime(2014, 5, 12),
+                datetime(2014, 6, 9),
+                datetime(2014, 7, 14),
+                datetime(2014, 8, 11),
+                datetime(2014, 9, 15),
+            )),
+
         )
         
         """
@@ -87,20 +127,24 @@ class HTTester(unittest.TestCase):
         29 30 31
         """
         start_time = datetime(
-            year = 2013,
-            month = 12,
-            day = 4,
-            hour = 6,
-            minute = 20,
-            second = 5,
+            year=2013,
+            month=12,
+            day=4,
+            hour=6,
+            minute=20,
+            second=5,
         )
         
+        # Display AssertionError exception 
+        # with custom msg in assertEqual
+        self.longMessage = True
+
         for str_in, expected in vals:
-            gen = human_time.parse(str_in, start_time=start_time)
+            gen = parser.parse(str_in, start_time=start_time)
             
             for e in expected:
-                r = gen.__next__()
-                self.assertEqual(e, r)
+                r = next(gen)
+                self.assertEqual(e, r, str_in)
 
 if __name__ == '__main__':
     unittest.main()
