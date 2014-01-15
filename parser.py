@@ -1,118 +1,123 @@
-"""
-The parser side of things
-"""
-
+import re
 import filters, generators, consts
 from datetime import datetime
-import re
+from collections import defaultdict, namedtuple
+from consts import DatePattern, TimePattern
 
-# A matching regex
-# a list of functions to compose
-# a generator
-pipes = (
-    # Days
-    (re.compile(r"^(?P<principle>{})$".format(consts.re_all_day_names)),
-        [filters._cut_time, filters._filter_weekday],
-        generators._generator_day,
-    ),
-    
-    # We are looking for a day name (e.g. tusday) with a time after it (e.g. 8pm)
-    # we have some regex patterns already defined up the top
-    # our filter/map pipeline will ensure it's a weekday of the type found and apply the time
-    # these two functions use the named regex groups to pull the correct part from the text
-    # finally we know we are dealing with entire days so we generate on a day by day basis
-    (re.compile(r"^(?P<principle>{}) at (?P<applicant>{})$".format(consts.re_all_day_names, consts.re_all_time_names)),
-        [filters._apply_time, filters._filter_weekday],
-        generators._generator_day,
-    ),
 
-    (re.compile(r"^other (?P<principle>{}) at (?P<applicant>{})$".format(consts.re_all_day_names, consts.re_all_time_names)),
-        [filters._apply_time, filters._filter_everyother, filters._filter_weekday],
-        generators._generator_day,
-    ),
+mapping = namedtuple('Mapping', 'pattern, filters')
+pipes = defaultdict(lambda: [])
 
-    
-    (re.compile(r"^other (?P<principle>{})$".format(consts.re_all_day_names)),
-        [filters._cut_time, filters._filter_everyother, filters._filter_weekday],
-        generators._generator_day,
-    ),
-    
-    # Months
-    (re.compile(r"^(?P<selector>{}) (?P<principle>{}) of month$".format(consts.re_all_selector_names, consts.re_day_names)),
-        [filters._cut_time, filters._filter_identifier_in_month],
-        generators._generator_day,
-    ),
-    
-    (re.compile(r"^(?P<selector>[0-9]{1,2})(?:st|nd|rd|th)? of (?P<principle>month)$"),
-        [filters._cut_time, filters._filter_day_number_in_month],
-        generators._generator_day,
-    ),
-    
-    (re.compile(r"^(?P<selector>[0-9]{1,2})(?:st|nd|rd|th)? of (?P<principle>month) at (?P<applicant>%s)$" % (consts.re_all_time_names)),
-        [filters._apply_time, filters._filter_day_number_in_month],
-        generators._generator_day,
-    ),
-    
-    (re.compile(r"^(?P<selector>{}) (?P<principle>{}) of month at (?P<applicant>{})$".format(consts.re_all_selector_names, consts.re_day_names, consts.re_all_time_names)),
-        [filters._apply_time, filters._filter_identifier_in_month],
-        generators._generator_day,
-    ),
-    
-    # End of month
-    (re.compile(r"^end of month$"), 
-        [filters._cut_time, filters._filter_end_of_month], 
-        generators._generator_day
-    ),
 
-    (re.compile(r"^end of month at (?P<applicant>{})$".format(consts.re_all_time_names)), 
-        [filters._apply_time, filters._filter_end_of_month], 
-        generators._generator_day
-    ),
+def add_pipe(regex, filters, priority):
+    """Registers new pipe.
 
-    (re.compile(r"^(?P<selector>{}) (?P<principle>{}) after (?P<selector2>{}) (?P<principle2>{}) of month$".format(consts.re_all_selector_names, consts.re_day_names, consts.re_all_selector_names, consts.re_day_names)),
-        [filters._cut_time, filters._filter_identifier_in_month_after], 
-        generators._generator_day
-    ),
+    Register new pipe in internal structure.
 
-    # Default implementation
-    (re.compile(r"^(?P<principle>{})$".format(consts.re_time_periods)),
-        [],
-        generators._generator_day
+    @param regex: regular expression that will trigger filters
+    @param filters: collection of filter generators
+    @param priority: used to sort execution order of filters
+    """
+    item = mapping(regex, filters)
+    pipes[priority].append(item)
+
+
+default_pipes = (
+    (
+        (
+            # every other Monday
+            r"other (?P<principle>%(ALL_DAY_NAMES)s)" % vars(DatePattern),
+            [filters._filter_everyother, filters._filter_weekday]
+        ),
+        (
+            # first monday after second sunday of month
+            r"(?P<selector>%(SELECTOR_NAMES)s) (?P<principle>%(DAY_NAMES)s) after (?P<selector2>%(SELECTOR_NAMES)s) (?P<principle2>%(DAY_NAMES)s) of month" % vars(DatePattern),
+            [filters._filter_identifier_in_month_after]
+        ),
+        (
+            # first monday of month
+            r"(?P<selector>%(SELECTOR_NAMES)s) (?P<principle>%(DAY_NAMES)s) of month" % vars(DatePattern),
+            [filters._filter_identifier_in_month],
+        ),
+        (
+            # 1st of month
+            r"(?P<selector>[0-9]{1,2})(?:st|nd|rd|th)? of (?P<principle>month)",
+            [filters._filter_day_number_in_month],
+        ),
+        (
+            # end of month
+            r"end of month",
+            [filters._filter_end_of_month],
+        ),
+        (
+            # friday
+            r"(?P<principle>%(ALL_DAY_NAMES)s)" % vars(DatePattern),
+            [filters._filter_weekday],
+        )
     ),
+    (
+        (
+            r"at (?P<applicant>%(TIME_ALL)s)" % vars(TimePattern),
+            [filters._apply_time]
+        ),
+        (
+            r"^((?!at (?P<applicant>%(TIME_ALL)s)).)*$" % vars(TimePattern),
+            [filters._cut_time]
+        )
+    )
 )
 
-"""Looks in the pipes list and selects a filter list and generator"""
+# register default groups
+for priority, group in enumerate(default_pipes):
+    for regexp, filters in group:
+        add_pipe(re.compile(regexp), filters, priority)
+
+
 def _find_pipes(item):
-    for preg, ps, rfunc in pipes:
-        result = preg.search(item)
-        if result:
-            func_list = (p(result) for p in ps)
-            return consts.compose(*func_list), rfunc
-    
+    """Looks in the pipes list and selects a filter list"""
+
+    filter_functions = []
+
+    for priority, mapping in pipes.iteritems():
+        for regexp, filters in mapping:
+            result = regexp.search(item)
+            if result:
+                filter_functions.extend([filter_(result) for filter_ in filters])
+                break
+
+    if filter_functions:
+        return filter_functions
+
     raise Exception("Unable to find pipe for item of '{}'".format(item))
 
-"""
-Clean up a string, remove double-spacing etc. Anything that might have been
-mis-entered by a user.
-"""
+
 _clean_regex = re.compile(r'every')
 def _clean(s):
+    """ Clean up a string, remove double-spacing etc. """
     s = _clean_regex.sub('', s)
-    
+
     while "  " in s:
         s = s.replace("  ", " ")
     
     return s.lower().strip()
 
-"""
-The main function. It returns the generator, a fuller readme
-is at the top of the file.
-"""
-def parse(timestring, start_time=None):
+
+def parse(timestring, start_time=None, gen_func=None):
+    """Returns datetime generator with applied filters
+
+    @param timestring: human time expression
+    @param start_time: initial time
+    @param gen_func: tbd
+    """
+
     if start_time is None:
         start_time = datetime.now()
-    
-    filter_function, generator_function = _find_pipes(_clean(timestring))
-    
-    for v in filter_function(generator_function(now=start_time)):
+
+    if gen_func is None:
+        gen_func = generators._generator_day
+
+    filter_functions = _find_pipes(_clean(timestring))
+    chained = consts.compose(filter_functions)
+
+    for v in chained(gen_func(now=start_time)):
         yield v
